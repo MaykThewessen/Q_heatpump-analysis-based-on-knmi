@@ -120,6 +120,42 @@ print(f"Total electricity input for cooling: {E_WP_cooling_input_sum:.0f} kWh/ye
 
 
 #%% Electricity cost by Entsoe data
+DA = pd.read_csv("outfile_DA_60min_NL_20240101_to_20250101.csv")
+print(DA)
+
+# Convert datetime to pandas datetime and handle timezone
+DA['datetime'] = pd.to_datetime(DA['datetime'], utc=True)
+DA.set_index('datetime', inplace=True)
+
+# Convert timezone-aware to timezone-naive for compatibility
+DA.index = DA.index.tz_convert(None)
+
+price = DA['DA_price']  # Keep in EUR/MWh
+
+# Align price data with main dataframe
+price_aligned = price.reindex(df.index, method='nearest')
+
+cost_heating_per_hour = E_WP_heating_input * price_aligned / 1000  # cost per hour in EUR (convert kWh to MWh)
+df['cost_heating_per_hour'] = cost_heating_per_hour
+
+cost_cooling_per_hour = E_WP_cooling_input * price_aligned / 1000  # cost per hour in EUR (convert kWh to MWh)
+df['cost_cooling_per_hour'] = cost_cooling_per_hour
+
+total_heating_cost = cost_heating_per_hour.sum()
+total_cooling_cost = cost_cooling_per_hour.sum()
+
+print(f"Total electricity cost for heating: {total_heating_cost:_.0f} EUR/year".replace('_', '.'))
+print(f"Total electricity cost for cooling: {total_cooling_cost:_.0f} EUR/year".replace('_', '.'))
+
+avg_heating_cost_per_MWh = total_heating_cost / E_WP_heating_input_sum * 1000
+avg_cooling_cost_per_MWh = total_cooling_cost / E_WP_cooling_input_sum * 1000
+
+print(f"Average electricity cost for heating: {avg_heating_cost_per_MWh:.1f} EUR/MWh".replace('_', '.'))
+print(f"Average electricity cost for cooling: {avg_cooling_cost_per_MWh:.1f} EUR/MWh".replace('_', '.'))
+
+average_price_per_MWh = price_aligned.mean()
+print(f"Average electricity price over the year: {average_price_per_MWh:.1f} EUR/MWh")
+
 
 
 
@@ -195,11 +231,12 @@ print(f"Average CO2 emissions NL 2024: {avg_CO2_source:.1f} gCO2/kWh")
 
 #%% Plotly HTML plotting for Heat Pump / Heating
 # Create subplots
-fig = make_subplots(rows=4, cols=1, subplot_titles=(
+fig = make_subplots(rows=5, cols=1, subplot_titles=(
     f"Ambient Temperature NL: (De Bilt) Avg: {df['T_260'].mean():.1f}°C, Min: {df['T_260'].min():.1f}°C, Max: {df['T_260'].max():.1f}°C",
     f"Heating: {Q_heat.sum()/10.5:.0f} m3 gas eq. Heat_max = {Q_heat.max():.1f} kWth, COP_min = {COP_heat.min():.1f}, COP_max = {COP_heat.max():.1f}",
     f"Heating avg: {Q_heat[Q_heat != 0].mean():.1f} kWth, Heatpump avg: {E_WP_heating_input[E_WP_heating_input != 0].mean():.1f} kWe, COP avg: {COP_heat_avg:.1f}, Elec input: {E_WP_heating_input.sum():.0f} kWh/y",
-    f"Heatpump avg: {avg_CO2_per_Q_heatpump:.1f} gCO2/kWh-th, {avg_CO2_per_kWh_heatpump:.1f} gCO2/kWh, NL 2024 avg: {avg_CO2_source:.1f} gCO2/kWh, Total: {total_CO2_emissions_kg_heating:_.0f} kg/y".replace('_', '.')
+    f"Heatpump avg: {avg_CO2_per_Q_heatpump:.1f} gCO2/kWh-th, {avg_CO2_per_kWh_heatpump:.1f} gCO2/kWh, NL 2024 avg: {avg_CO2_source:.1f} gCO2/kWh, Total: {total_CO2_emissions_kg_heating:_.0f} kg/y".replace('_', '.'),
+    f"Eletricity: Heatpump avg: {avg_heating_cost_per_MWh:.1f} EUR/MWh, Market avg : {average_price_per_MWh:.0f} EUR/MWh, ratio: {100*avg_heating_cost_per_MWh/average_price_per_MWh:,.0f}%, Total: {total_heating_cost:_.0f} EUR/y".replace('_', '.')
 ))
 
 # Temperature over time plot
@@ -238,6 +275,13 @@ fig.add_trace(go.Scatter(x=df.index, y=E_WP_heating_input_CO2, mode='lines', nam
 fig.update_xaxes(title_text="Date", row=4, col=1)
 fig.update_yaxes(title_text="CO2 Emissions [gCO2/kWh]", row=4, col=1)
 
+# Cost subplot for heating
+fig.add_trace(go.Scatter(x=df.index, y=cost_heating_per_hour, mode='lines', name='Heating Cost per Hour', line=dict(color='green')), row=5, col=1)
+fig.add_trace(go.Scatter(x=df.index, y=price_aligned, mode='lines', name='Electricity Price', line=dict(color='purple')), row=5, col=1)
+
+fig.update_xaxes(title_text="Date", row=5, col=1)
+fig.update_yaxes(title_text="Cost [EUR/h] / Price [EUR/MWh]", row=5, col=1)
+
 fig.update_layout(title_text=f"Heat Pump (Heating) annual analysis per hour, Date Range: {start}-{end}", title_x=0.5)
 
 # Save figure to html
@@ -253,12 +297,14 @@ print(f"Data and plots saved")
 
 #%% Cooling HTML plotting
 # Create subplots for cooling analysis
-fig_cooling = make_subplots(rows=4, cols=1, subplot_titles=(
+fig_cooling = make_subplots(rows=5, cols=1, subplot_titles=(
     f"Ambient Temperature NL: (De Bilt) Avg: {df['T_260'].mean():.1f}°C, Min: {df['T_260'].min():.1f}°C, Max: {df['T_260'].max():.1f}°C",
     f"Cooling demand: {Q_cool_sum:,.0f} kWh-th, Max power: {Q_cool[Q_cool != 0].max():.1f} kW-th, COPmin: {COP_cool[COP_cool != 0].min():.1f}, COPavg: {COP_cool_avg:.1f} volume weighted, COPmax: {COP_cool[COP_cool != 0].max():.1f}",
     f"Cooling avg: {Q_cool[Q_cool != 0].mean():.1f} kW-th, Airco avg: {E_WP_cooling_input[E_WP_cooling_input != 0].mean():.1f} kWe, Elec input: {E_WP_cooling_input.sum():.0f} kWh/y",
-    f"Airco per heat: {avg_CO2_per_Q_coolpump:,.0f} gCO2/kWh-th , Airco avg per electricity: {avg_CO2_per_kWh_coolpump:.0f} gCO2/kWh, NL 2024 avg: {avg_CO2_source:.0f} gCO2/kWh, Total: {total_CO2_emissions_kg_cooling:_.0f} kg/y".replace('_', '.')
-))
+    f"Airco per heat: {avg_CO2_per_Q_coolpump:,.0f} gCO2/kWh-th , Airco avg per electricity: {avg_CO2_per_kWh_coolpump:.0f} gCO2/kWh, NL 2024 avg: {avg_CO2_source:.0f} gCO2/kWh, Total: {total_CO2_emissions_kg_cooling:_.0f} kg/y".replace('_', '.'),
+    f"Electricity: Airco avg:{avg_cooling_cost_per_MWh:.1f} EUR/MWh, Market avg: {average_price_per_MWh:.0f} EUR/MWh, ratio: {100*avg_cooling_cost_per_MWh/average_price_per_MWh:,.0f}%, Total: {total_cooling_cost:_.0f} EUR/y".replace('_', '.')
+    )
+)               
 
 # Temperature over time plot for cooling
 fig_cooling.add_trace(go.Scatter(x=df.index, y=df["T_260"], mode='lines', name=f"KNMI Temperature at Station: {stations1['name'][260]}"), row=1, col=1)
@@ -295,6 +341,13 @@ fig_cooling.add_trace(go.Scatter(x=df.index, y=E_WP_cooling_input_CO2, mode='lin
 
 fig_cooling.update_xaxes(title_text="Date", row=4, col=1)
 fig_cooling.update_yaxes(title_text="CO2 Emissions [gCO2/kWh]", row=4, col=1)
+
+# Cost subplot for cooling
+fig_cooling.add_trace(go.Scatter(x=df.index, y=cost_cooling_per_hour, mode='lines', name='Cooling Cost per Hour', line=dict(color='green')), row=5, col=1)
+fig_cooling.add_trace(go.Scatter(x=df.index, y=price_aligned, mode='lines', name='Electricity Price', line=dict(color='purple')), row=5, col=1)
+
+fig_cooling.update_xaxes(title_text="Date", row=5, col=1)
+fig_cooling.update_yaxes(title_text="Cost [EUR/h] / Price [EUR/MWh]", row=5, col=1)
 
 fig_cooling.update_layout(title_text=f"Cooling Airco annual analysis per hour, Date Range: {start}-{end}", title_x=0.5)
 
