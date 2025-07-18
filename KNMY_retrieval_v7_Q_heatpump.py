@@ -80,7 +80,7 @@ print(f"Data saved to {output_filename}")
 T_heat_setpoint = 18  # Setpoint temperature in Celsius of building
 dT_heat = T_heat_setpoint - df['T_260']  # Temperature difference between setpoint and actual temperature
 dT_heat[dT_heat < 1] = 0  # Set heating off when dT is < 1 values to zero, as no heat demand when T_260 is above setpoint
-Q_heat = dT_heat * (10/18)  # hourly values, at 0'C heat load = 10kW thus dt 20'K = 10kW, thus 20*X=10.000, thus X=500W/'K - Convert temperature difference to heat demand in kWh (assuming 1 degree Celsius = 1000 kWh for simplicity)
+Q_heat = dT_heat * (6.0/18)  # hourly values, at 0'C heat load = 7.5kW (25% less than 10kW), thus dt 20'K = 7.5kW, thus 20*X=7,500, thus X=375W/'K - Convert temperature difference to heat demand in kWh
 COP_heat = 5.5 - dT_heat*(2.5/18)  # COP at 20'C Ambient is 5.5, and at 0'C it is 3.5, thus 20'K lowers it with 2.0 thus 0.1 per 1'K in dT -  Coefficient of Performance (COP) of the heat pump, assuming a linear decrease with increasing temperature difference
 E_WP_heating_input = Q_heat / COP_heat  # kW electricity per hour (thus is also kWh) convert heat demand to electrical input energy in kWh
 
@@ -110,87 +110,70 @@ print(f"Total electricity input for heating: {E_WP_heating_input_sum:.0f} kWh/ye
 
 
 #%% Electricity emissions on hourly basis by NED.nl data
-# Define the API endpoint for hourly emissions data
-url = "https://api.ned.nl/v1/energy/co2-emissions"
+import pandas as pd
 
-# Define the parameters for the API request
-params = {
-    "year": 2024,
-    "format": "json"  # Specify the format as JSON
-}
+# Load hourly electricity emissions data from NED.nl
+ned_emissions_file = "data_export_NED_CO2_20240101_to_20241231_hourly.xlsx"
+ned_emissions_df = pd.read_excel(ned_emissions_file)
+print(ned_emissions_df)
 
-try:
-    # Make the API request
-    response = requests.get(url, params=params)
+# The file has columns: 'validfrom' and 'emissionfactor'
+# Convert 'validfrom' to pandas datetime if not already
+ned_emissions_df['datetime'] = pd.to_datetime(ned_emissions_df['validfrom'])
 
-    # Check if the request was successful (status code 200)
-    if response.status_code == 200:
-        # Parse the JSON response
-        data = response.json()
+# Set datetime as index for easy alignment
+ned_emissions_df.set_index('datetime', inplace=True)
 
-        # Process the data (example: print the first few entries)
-        print("First 5 CO2 emission entries:")
-        for i in range(min(5, len(data))):
-            print(data[i])
+# Convert timezone-aware datetime to timezone-naive for compatibility
+ned_emissions_df.index = ned_emissions_df.index.tz_localize(None)
 
-        # Convert the JSON data to a Pandas DataFrame
-        emissions_df = pd.DataFrame(data)
+# Align emissions data with the main dataframe (df)
+# Assume df.index is also datetime and at hourly frequency
+# If not, convert df.index to datetime
+if not pd.api.types.is_datetime64_any_dtype(df.index):
+    df.index = pd.to_datetime(df.index)
 
-        # Convert 'datetime' column to datetime objects
-        emissions_df['datetime'] = pd.to_datetime(emissions_df['datetime'])
+# Reindex emissions to match df, forward/backward fill if needed
+co2_emissions = ned_emissions_df['emissionfactor'].reindex(df.index, method='nearest') * 1000 # gCO2/kWh
+print(co2_emissions.describe())
 
-        # Set 'datetime' column as index
-        emissions_df = emissions_df.set_index('datetime')
+# Calculate hourly emissions for heat pump electricity input
+# E_WP_heating_input is in kWh per hour
+E_WP_heating_input_CO2 = E_WP_heating_input * co2_emissions  # gCO2 per hour
 
-        # Rename the 'co2_emissions' column to 'CO2_emissions'
-        emissions_df.rename(columns={'co2_emissions': 'CO2_emissions'}, inplace=True)
+# Add to df for further analysis/plotting if desired
+df['E_WP_heating_input_CO2_g'] = E_WP_heating_input_CO2
 
-        # Print the info of the DataFrame
-        print("\nDataFrame Info:")
-        print(emissions_df.info())
+# Calculate total annual CO2 emissions for heating
+total_CO2_emissions_kg = E_WP_heating_input_CO2.sum() / 1000  # convert g to kg
 
-        # Display the first few rows of the DataFrame
-        print("\nDataFrame Head:")
-        print(emissions_df.head())
+# Calculate average CO2 emissions per kWh for heat pump
+avg_CO2_per_kWh_heatpump = (E_WP_heating_input_CO2.sum() / E_WP_heating_input.sum()) if E_WP_heating_input.sum() > 0 else 0
 
-        # Optionally, save the data to a CSV file
-        emissions_df.to_csv("co2_emissions_2024.csv")
-        print("CO2 emissions data saved to co2_emissions_2024.csv")
+# Calculate average CO2 emissions from source
+avg_CO2_source = co2_emissions.mean()
 
-        # Merge the DataFrames based on the datetime index
-        df = pd.merge(df, emissions_df, left_index=True, right_index=True, how='left')
+print(f"Total CO2 emissions for heat pump heating: {total_CO2_emissions_kg:_.0f} kg/year".replace('_', '.'))
+print(f"Average CO2 emissions per kWh for heat pump: {avg_CO2_per_kWh_heatpump:.1f} gCO2/kWh")
+print(f"Average CO2 emissions NL 2024: {avg_CO2_source:.1f} gCO2/kWh")
 
-        # Print the info of the DataFrame
-        print("\nDataFrame Info:")
-        print(df.info())
 
-        # Display the first few rows of the DataFrame
-        print("\nDataFrame Head:")
-        print(df.head())
 
-    else:
-        # Print an error message if the request was not successful
-        print(f"Error: API request failed with status code {response.status_code}")
-        print(response.text)  # Print the response content for debugging
 
-except requests.exceptions.RequestException as e:
-    # Handle any exceptions that may occur during the API request
-    print(f"Error: An error occurred during the API request: {e}")
-except json.JSONDecodeError as e:
-    # Handle JSON decoding errors
-    print(f"Error: Could not decode JSON response: {e}")
-except Exception as e:
-    # Handle other exceptions
-    print(f"An unexpected error occurred: {e}")
+
+
+
+
 
 
 
 #%% Plotly HTML plotting
 # Create subplots
-fig = make_subplots(rows=3, cols=1, subplot_titles=(
+fig = make_subplots(rows=4, cols=1, subplot_titles=(
     f"Ambient Temperature NL: (De Bilt) Avg: {df['T_260'].mean():.1f}°C, Min: {df['T_260'].min():.1f}°C, Max: {df['T_260'].max():.1f}°C",
     f"Heat: {Q_heat_sum/10.5:.0f} m3 gas eq. Q_heat_max ={Q_heat.max():.1f} kWth, COP_min: {COP_heat.min():.1f}, COP_max: {COP_heat.max():.1f}",
-    f"Heat avg: {Q_heat_avg:.1f} kWth, Heatpump avg: {E_WP_heating_input.mean():.1f} kWe, COP avg: {COP_heat_avg:.1f}, Elec input: {E_WP_heating_input_sum:.0f} kWh/y"
+    f"Heat avg: {Q_heat_avg:.1f} kWth, Heatpump avg: {E_WP_heating_input.mean():.1f} kWe, COP avg: {COP_heat_avg:.1f}, Elec input: {E_WP_heating_input_sum:.0f} kWh/y",
+    f"CO2 Emissions: Heatpump avg: {avg_CO2_per_kWh_heatpump:.1f} gCO2/kWh, NL 2024 avg: {avg_CO2_source:.1f} gCO2/kWh, Total: {total_CO2_emissions_kg:_.0f} kg/y".replace('_', '.')
 ))
 
 # Temperature over time plot
@@ -223,6 +206,13 @@ fig.add_trace(go.Histogram(x=data_hist3, name='E_WP_heating_input', autobinx=Fal
 
 fig.update_xaxes(title_text="kW", row=3, col=1)
 fig.update_yaxes(title_text="Ocurrence [hours/year]", row=3, col=1) # , tickformat=".0%"
+
+# CO2 Emissions subplot
+fig.add_trace(go.Scatter(x=df.index, y=co2_emissions, mode='lines', name='CO2 Source Emissions', line=dict(color='red')), row=4, col=1)
+fig.add_trace(go.Scatter(x=df.index, y=E_WP_heating_input_CO2, mode='lines', name='Heat Pump CO2 Emissions', line=dict(color='orange')), row=4, col=1)
+
+fig.update_xaxes(title_text="Date", row=4, col=1)
+fig.update_yaxes(title_text="CO2 Emissions [gCO2/kWh]", row=4, col=1)
 
 fig.update_layout(title_text=f"Heat Pump annual analysis per hour, Date Range: {start}-{end}", title_x=0.5)
 
