@@ -1,4 +1,4 @@
-🏡 Heat Pump Load & COP Analysis (NL)
+<img width="2502" height="2542" alt="image" src="https://github.com/user-attachments/assets/d07717e7-b174-4d8a-bb62-1905a07649e1" />🏡 Heat Pump Load & COP Analysis (NL)
 
 This repository provides a Python-based tool to estimate the electricity demand and performance of heat pumps for residential buildings in the Netherlands, using KNMI temperature data.
 
@@ -63,5 +63,7 @@ You can customize parameters such as:
 📝 License
 
 MIT License
+
+![Uploading image.png…]()
 
 👤 Author:  Mayk Thewessen – Treehouse Energy
